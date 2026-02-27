@@ -1,0 +1,154 @@
+#!/bin/busybox sh
+
+/bin/busybox --install -s /bin
+export PATH=/bin:/usr/bin:/sbin:/usr/sbin
+
+mount -t proc none /proc
+mount -t sysfs none /sys
+mount -t devtmpfs none /dev
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+
+echo "7" > /proc/sys/kernel/printk
+
+echo "[initramfs] unblank display" > /dev/kmsg
+echo 0 > /sys/class/graphics/fb0/blank 
+
+echo "[initramfs] setup USB RNDIS" > /dev/kmsg
+mount -t configfs configfs /sys/kernel/config
+mkdir -p /sys/kernel/config/usb_gadget/g1
+cd /sys/kernel/config/usb_gadget/g1
+echo "0x18d1" > idVendor
+echo "0x4ee2" > idProduct
+mkdir -p strings/0x409
+echo "12345678" > strings/0x409/serialnumber
+echo "Sony" > strings/0x409/manufacturer
+echo "Xperia 5 II" > strings/0x409/product
+mkdir -p functions/rndis.usb0
+mkdir -p configs/b.1/strings/0x409
+echo "Conf 1" > configs/b.1/strings/0x409/configuration
+ln -s functions/rndis.usb0 configs/b.1/ 
+
+echo "[initramfs] Waiting for UDC..." > /dev/kmsg
+UDC_TRIES=0
+while [ -z "$(ls /sys/class/udc )" ] && [ $UDC_TRIES -lt 15 ]; do
+    sleep 1
+    UDC_TRIES=$((UDC_TRIES + 1))
+done
+
+UDC=$(ls /sys/class/udc  | head -n 1)
+if [ -n "$UDC" ]; then
+    echo "$UDC" > UDC
+    echo "[initramfs] bind to UDC: $UDC" > /dev/kmsg
+else
+    echo "[initramfs] ERROR: No UDC found. RNDIS will fail!" > /dev/kmsg
+fi
+sleep 1
+ifconfig rndis0 172.16.42.1 netmask 255.255.255.0 up  || ifconfig usb0 172.16.42.1 netmask 255.255.255.0 up 
+ifconfig lo 127.0.0.1 up
+echo "[initramfs] RNDIS up at 172.16.42.1" > /dev/kmsg
+
+if [ -c /dev/watchdog ]; then
+    watchdog -t 5 /dev/watchdog &
+elif [ -c /dev/watchdog0 ]; then
+    watchdog -t 5 /dev/watchdog0 &
+fi
+
+echo "[initramfs] mount rootfs" > /dev/kmsg
+cd /
+mkdir -p /mnt/root
+
+TRIES=0
+while [ ! -b /dev/mmcblk0p2 ] && [ $TRIES -lt 30 ]; do
+    echo "[initramfs] waiting for /dev/mmcblk0p2 ($TRIES/30)" > /dev/kmsg
+    sleep 1
+    TRIES=$((TRIES + 1))
+done
+
+if [ -b /dev/mmcblk0p2 ]; then
+    mount -t ext4 -o rw /dev/mmcblk0p2 /mnt/root
+    if [ $? -eq 0 ]; then
+        echo "[initramfs] microSD mounted at /mnt/root" > /dev/kmsg
+
+        if [ -x /mnt/root/sbin/init ] || [ -L /mnt/root/sbin/init ]; then
+            echo "[initramfs] found /sbin/init - injecting systemd services" > /dev/kmsg
+
+            cp /bin/netshell /mnt/root/usr/bin/netshell
+            chmod +x /mnt/root/usr/bin/netshell
+
+            cat > /mnt/root/etc/systemd/system/rndis-network.service << 'EOF'
+[Unit]
+Description=rndis
+After=sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'sleep 2; ip addr add 172.16.42.1/24 dev rndis0  || ip addr add 172.16.42.1/24 dev usb0 ; ip link set rndis0 up  || ip link set usb0 up ; ip link set lo up'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+            cat > /mnt/root/usr/bin/run-netshell.sh << 'EOF'
+#!/bin/sh
+while true; do
+    /usr/bin/netshell 23
+    sleep 1
+done
+EOF
+            chmod +x /mnt/root/usr/bin/run-netshell.sh
+
+            cat > /mnt/root/etc/systemd/system/netshell.service << 'EOF'
+[Unit]
+Description=Netshell Rescue Daemon
+After=rndis-network.service
+Requires=rndis-network.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/run-netshell.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+            mkdir -p /mnt/root/etc/systemd/system/multi-user.target.wants
+            ln -sf /etc/systemd/system/rndis-network.service /mnt/root/etc/systemd/system/multi-user.target.wants/rndis-network.service
+            ln -sf /etc/systemd/system/netshell.service /mnt/root/etc/systemd/system/multi-user.target.wants/netshell.service
+
+            sed -i 's/.*RuntimeWatchdogSec.*/RuntimeWatchdogSec=5s/' /mnt/root/etc/systemd/system.conf
+
+            mkdir -p /mnt/root/dev /mnt/root/proc /mnt/root/sys /mnt/root/run /mnt/root/tmp
+
+            mount --move /dev /mnt/root/dev
+            mount --move /proc /mnt/root/proc
+            mount --move /sys /mnt/root/sys
+            echo "[initramfs] stopping watchdog" > /mnt/root/dev/kmsg
+            killall -15 watchdog
+            sleep 2
+
+            echo "[initramfs] switch_root" > /mnt/root/dev/kmsg
+            exec switch_root -c /dev/console /mnt/root /lib/systemd/systemd
+
+            echo "[initramfs] switch_root failed" > /mnt/root/dev/kmsg
+        else
+            echo "[initramfs] no /sbin/init on rootfs" > /dev/kmsg
+        fi
+    else
+        echo "[initramfs] mount failed" > /dev/kmsg
+    fi
+else
+    echo "[initramfs] /dev/mmcblk0p2 not found" > /dev/kmsg
+fi
+
+echo "[initramfs] rescue mode" > /dev/kmsg
+/bin/netshell 23 &
+
+while true; do
+    echo "[initramfs] rescue: heartbeat alive" > /dev/kmsg
+    echo 0 > /sys/class/graphics/fb0/blank 
+    sleep 10
+done
