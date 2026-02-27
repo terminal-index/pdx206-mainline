@@ -1337,7 +1337,6 @@ This project is very much a work in progress. If you have experience with any of
 - [postmarketOS Wiki - Sony Xperia 5 II](https://wiki.postmarketos.org/wiki/Sony_Xperia_5_II_(sony-pdx206))
 - [postmarketOS Porting Guide](https://wiki.postmarketos.org/wiki/Porting_to_a_new_device)
 - [Freedreno Documentation](https://docs.mesa3d.org/drivers/freedreno.html)
-- [SoMainline Project](https://github.com/nickel-scrape/SoMainline) — Sony mainline kernel efforts
 - [TheMuppets Vendor Blobs](https://github.com/nickel-scrape/TheMuppets/proprietary_vendor_sony)
 - Countless hours on `#linux-msm` and `#postmarketos` IRC/Matrix
 
