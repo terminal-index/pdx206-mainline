@@ -1,5 +1,7 @@
 <h1 align="center">postmarketOS on Sony Xperia 5 II (pdx206) - Complete Engineering Log</h1>
 
+<p align="center"> Also available as work on https://orcid.org/0009-0009-6473-7515 </p>
+
 <h4 align="center">Also available in human-readable and downloadable .PDF version!</h4>
 
 <p align="center">
